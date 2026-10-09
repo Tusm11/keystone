@@ -1,3 +1,20 @@
+# Local dev infrastructure for Keystone.
+#
+# Three usage modes:
+#
+# 1. Dev (default) — native Go hot-reload for the origin:
+#       docker compose up -d                        (postgres + redis only)
+#       cd origin && go run ./cmd/server            (origin on :8080)
+#       cd edge && npm run dev                      (edge on :8787)
+#
+# 2. Scale (horizontal) — origin + LB in Docker, scaled:
+#       docker compose --profile scale up -d --scale origin=3 --build
+#       # Nginx LB on :8090 → three origin replicas.
+#       # Edge should point at :8090 instead of :8080.
+#
+# 3. Load tests — see loadtest/README.md
+#       docker compose --profile loadtest run --rm k6 run scripts/<name>.js
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,8 +26,6 @@ services:
       POSTGRES_DB: keystone
     ports:
       - "5432:5432"
-    # pg_stat_statements is the per-query counter — needed to prove the
-    # singleflight defense (count SELECTs on resolve). Harmless always-on.
     command:
       - "postgres"
       - "-c"
@@ -38,6 +53,56 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # --- scaling profile: multiple origin replicas + nginx LB ---
+
+  origin:
+    profiles: ["scale"]
+    build:
+      context: ./origin
+    # No container_name — Docker Compose scaling needs unique auto-names.
+    environment:
+      ORIGIN_ADDR: ":8080"
+      DATABASE_URL: postgres://keystone:keystone_dev_pw@postgres:5432/keystone
+      REDIS_URL: redis://redis:6379/0
+      # Capability signing — only reads these if you set them in a .env file.
+      KEYSTONE_SIGNING_PRIVATE_KEY: ${KEYSTONE_SIGNING_PRIVATE_KEY:-}
+      KEYSTONE_SIGNER_ID: ${KEYSTONE_SIGNER_ID:-}
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  clickworker:
+    profiles: ["scale"]
+    build:
+      context: ./origin
+    container_name: keystone-clickworker
+    entrypoint: ["/usr/local/bin/clickworker"]
+    environment:
+      DATABASE_URL: postgres://keystone:keystone_dev_pw@postgres:5432/keystone
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  lb:
+    profiles: ["scale"]
+    image: nginx:1.27-alpine
+    container_name: keystone-lb
+    volumes:
+      - ./infra/lb/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8090:8090"
+    depends_on:
+      - origin
+
+  # --- loadtest profile ---
 
   k6:
     image: grafana/k6:latest
