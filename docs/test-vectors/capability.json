@@ -1,0 +1,54 @@
+{
+  "spec_version": "v1",
+  "generated": "2026-10-09T18:57:52Z",
+  "vectors": [
+    {
+      "name": "basic_no_expiry",
+      "description": "minimum fields; no expiry, unlimited uses",
+      "public_key_b64": "wzgdBZSZmSprFGitUJyb9eF-tDvnlDSJq7muzHES6Ms",
+      "private_key_b64": "a2V5c3RvbmUtdGVzdC12ZWN0b3JzLXNlZWQtZml4ZWTDOB0FlJmZKmsUaK1QnJv14X60O-eUNImrua7McRLoyw",
+      "capability": {
+        "code": "aB3xZ9k",
+        "scope": "read-only",
+        "signer": "keystone-test",
+        "exp": 0,
+        "uses": 0,
+        "nonce": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+      },
+      "expected_token": "v1.eyJjb2RlIjoiYUIzeFo5ayIsImV4cCI6MCwibm9uY2UiOiJhMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5MCIsInNjb3BlIjoicmVhZC1vbmx5Iiwic2lnbmVyIjoia2V5c3RvbmUtdGVzdCIsInVzZXMiOjB9.RNNrA3EjIqiy_wuw1QnYPzbWG0Sz-RnmTb5iaZa3Ork7ORgdQspG0KdJs0AJuejnPQhoNOP9qXBg4weOlVCmBQ",
+      "expected_body_b64": "eyJjb2RlIjoiYUIzeFo5ayIsImV4cCI6MCwibm9uY2UiOiJhMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5MCIsInNjb3BlIjoicmVhZC1vbmx5Iiwic2lnbmVyIjoia2V5c3RvbmUtdGVzdCIsInVzZXMiOjB9"
+    },
+    {
+      "name": "bounded_expiry_and_uses",
+      "description": "both exp and uses set; typical production shape",
+      "public_key_b64": "wzgdBZSZmSprFGitUJyb9eF-tDvnlDSJq7muzHES6Ms",
+      "private_key_b64": "a2V5c3RvbmUtdGVzdC12ZWN0b3JzLXNlZWQtZml4ZWTDOB0FlJmZKmsUaK1QnJv14X60O-eUNImrua7McRLoyw",
+      "capability": {
+        "code": "QqRrSsT",
+        "scope": "read-only",
+        "signer": "keystone-test",
+        "exp": 1760000000,
+        "uses": 5,
+        "nonce": "ffeeddccbbaa998877665544332211aa"
+      },
+      "expected_token": "v1.eyJjb2RlIjoiUXFSclNzVCIsImV4cCI6MTc2MDAwMDAwMCwibm9uY2UiOiJmZmVlZGRjY2JiYWE5OTg4Nzc2NjU1NDQzMzIyMTFhYSIsInNjb3BlIjoicmVhZC1vbmx5Iiwic2lnbmVyIjoia2V5c3RvbmUtdGVzdCIsInVzZXMiOjV9.YE6ZnI_9B7ScaJ5_4sFvIb9MNthmaVs5mkOayfbQEbVYBendi-ftbgfaE3fwTiBPPQel8IpyDCJ_j5Zm74tBDA",
+      "expected_body_b64": "eyJjb2RlIjoiUXFSclNzVCIsImV4cCI6MTc2MDAwMDAwMCwibm9uY2UiOiJmZmVlZGRjY2JiYWE5OTg4Nzc2NjU1NDQzMzIyMTFhYSIsInNjb3BlIjoicmVhZC1vbmx5Iiwic2lnbmVyIjoia2V5c3RvbmUtdGVzdCIsInVzZXMiOjV9"
+    },
+    {
+      "name": "different_scope",
+      "description": "custom scope label; validates scope round-trip",
+      "public_key_b64": "wzgdBZSZmSprFGitUJyb9eF-tDvnlDSJq7muzHES6Ms",
+      "private_key_b64": "a2V5c3RvbmUtdGVzdC12ZWN0b3JzLXNlZWQtZml4ZWTDOB0FlJmZKmsUaK1QnJv14X60O-eUNImrua7McRLoyw",
+      "capability": {
+        "code": "zY1xWvU",
+        "scope": "write-once",
+        "signer": "keystone-test",
+        "exp": 1800000000,
+        "uses": 1,
+        "nonce": "00112233445566778899aabbccddeeff"
+      },
+      "expected_token": "v1.eyJjb2RlIjoielkxeFd2VSIsImV4cCI6MTgwMDAwMDAwMCwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsInNjb3BlIjoid3JpdGUtb25jZSIsInNpZ25lciI6ImtleXN0b25lLXRlc3QiLCJ1c2VzIjoxfQ.5ce8izJ1G49cbMQuCeDjmYaB20c_hqMdBm0N-I4g-2X3osJkB1vZ1ZpBMjURGrjLtXxyLF7h9ywjNpVdBnDiBg",
+      "expected_body_b64": "eyJjb2RlIjoielkxeFd2VSIsImV4cCI6MTgwMDAwMDAwMCwibm9uY2UiOiIwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZiIsInNjb3BlIjoid3JpdGUtb25jZSIsInNpZ25lciI6ImtleXN0b25lLXRlc3QiLCJ1c2VzIjoxfQ"
+    }
+  ]
+}
