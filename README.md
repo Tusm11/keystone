@@ -1,4 +1,4 @@
-# Keystone
+# keystone
 
 > Short-link infrastructure for the agent era. Provenance-signed
 > capability tokens, horizontal-scale Go origin, TypeScript edge, and
