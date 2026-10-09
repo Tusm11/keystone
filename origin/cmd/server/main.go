@@ -1,12 +1,17 @@
 // keystone-origin: the authoritative shortener API.
 //
-// Backing store is chosen at startup from env vars:
-//
-//   DATABASE_URL + REDIS_URL  → Cached(Postgres) + click publisher   (prod)
+// Store composition:
+//   DATABASE_URL + REDIS_URL  → Cached(Postgres) + click publisher
 //   DATABASE_URL only         → Postgres, no cache, no analytics
-//   neither                   → in-memory, no analytics              (dev)
+//   neither                   → in-memory                            (dev)
 //
-// Handlers depend only on the Store interface + an optional Publisher.
+// Capability signing (optional):
+//   KEYSTONE_SIGNING_PRIVATE_KEY + KEYSTONE_SIGNER_ID
+//     → origin can mint capability tokens via POST /capabilities.
+//   Without them, this node is verifier-only — but there are no other
+//   signers to verify against yet, so capabilities just stay off.
+//
+// Generate a keypair with:  go run ./cmd/keygen
 package main
 
 import (
@@ -23,6 +28,7 @@ import (
 
 	"github.com/Tusm11/keystone/origin/internal/events"
 	keystonehttp "github.com/Tusm11/keystone/origin/internal/http"
+	"github.com/Tusm11/keystone/origin/internal/signing"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
 
@@ -32,11 +38,29 @@ func main() {
 
 	addr := envOr("ORIGIN_ADDR", ":8080")
 
-	store, publisher := build(log)
-	server := &keystonehttp.Server{Store: store, Clicks: publisher}
+	store, publisher, rdb := buildStorage(log)
+	signers, err := signing.NewFromEnv()
+	if err != nil {
+		log.Error("signing init failed", "err", err)
+		os.Exit(1)
+	}
+	var usesCounter *signing.UsesCounter
+	if rdb != nil {
+		usesCounter = signing.NewUsesCounter(rdb)
+	}
+	if signers.HasLocalSigner() {
+		log.Info("capability signing enabled")
+	} else {
+		log.Info("capability signing disabled (no KEYSTONE_SIGNING_PRIVATE_KEY)")
+	}
 
-	// Explicit timeouts — the Go stdlib default is "no timeout", a classic
-	// fd-exhaustion footgun.
+	server := &keystonehttp.Server{
+		Store:   store,
+		Clicks:  publisher,
+		Signers: signers,
+		Uses:    usesCounter,
+	}
+
 	s := &http.Server{
 		Addr:         addr,
 		Handler:      server.Routes(),
@@ -68,7 +92,7 @@ func main() {
 	log.Info("stopped")
 }
 
-func build(log *slog.Logger) (storage.Store, *events.Publisher) {
+func buildStorage(log *slog.Logger) (storage.Store, *events.Publisher, *redis.Client) {
 	dsn := os.Getenv("DATABASE_URL")
 
 	var base storage.Store
@@ -89,7 +113,7 @@ func build(log *slog.Logger) (storage.Store, *events.Publisher) {
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		return base, nil
+		return base, nil, nil
 	}
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -107,7 +131,7 @@ func build(log *slog.Logger) (storage.Store, *events.Publisher) {
 
 	cached := storage.NewCached(base, rdb, log)
 	publisher := events.NewPublisher(rdb, log)
-	return cached, publisher
+	return cached, publisher, rdb
 }
 
 func envOr(key, def string) string {

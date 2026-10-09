@@ -2,16 +2,16 @@
  * keystone-edge: the hot-path redirect Worker.
  *
  * Two-tier read path:
- *   1. Workers KV (edge-local, this PoP)        — serves hits in ~5–15ms
- *   2. Origin API over HTTP                     — serves misses, 20–200ms
+ *   1. Workers KV (edge-local, this PoP)  — ~5–15ms
+ *   2. Origin API (http)                   — misses only
  *
- * Write path (POST /shorten):
- *   edge → origin → return response
- *       → populate KV via ctx.waitUntil (non-blocking)
- *
- * No cache invalidation here because codes are immutable in v0.1 — once a
- * code → long_url mapping exists, it never changes. A write-only lifetime
- * means we never have to flush KV, which would otherwise be the hard part.
+ * Capability tokens:
+ *   - GET /:code?k=<token> — token passes through to origin for verification.
+ *     If present, we bypass the edge KV cache: the cache entry is only
+ *     code→long_url, which doesn't know whether a token is required for
+ *     this request. Correctness beats latency on signed paths; the vast
+ *     majority of requests are plain and still hit KV.
+ *   - POST /capabilities — passthrough to origin's minting endpoint.
  */
 
 import { Hono } from 'hono';
@@ -21,16 +21,11 @@ type Bindings = {
   LINKS: KVNamespace;
 };
 
-// Cache TTL at the edge. 1 hour balances "most short links are hot for
-// hours, not days" against "a mistake in origin shouldn't live forever."
-// 60s minimum is a Workers KV limit on cacheTtl.
 const EDGE_CACHE_TTL_SEC = 60 * 60;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.get('/health', (c) =>
-  c.json({ status: 'ok', service: 'keystone-edge' })
-);
+app.get('/health', (c) => c.json({ status: 'ok', service: 'keystone-edge' }));
 
 // POST /shorten — forward to origin, pre-warm KV on success.
 app.post('/shorten', async (c) => {
@@ -55,51 +50,75 @@ app.post('/shorten', async (c) => {
 
   const data = (await originRes.json()) as { code: string; long_url: string };
 
-  // Pre-warm the edge cache so the first click of this code is a KV hit,
-  // not a miss. ctx.waitUntil keeps the write going even after we return.
   c.executionCtx.waitUntil(
     c.env.LINKS.put(data.code, data.long_url, { expirationTtl: EDGE_CACHE_TTL_SEC })
   );
 
   const url = new URL(c.req.url);
   const shortUrl = `${url.protocol}//${url.host}/${data.code}`;
-
   return c.json({ code: data.code, short_url: shortUrl, long_url: data.long_url }, 201);
 });
 
-// GET /:code — the hot read path. KV first; origin on miss; populate on miss.
+// POST /capabilities — passthrough to origin's minting endpoint.
+app.post('/capabilities', async (c) => {
+  const rawBody = await c.req.text();
+  const originRes = await fetch(`${c.env.ORIGIN_URL}/capabilities`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: rawBody,
+  });
+  const text = await originRes.text();
+  const minted = text ? (JSON.parse(text) as { code: string; token: string }) : null;
+
+  // If origin minted successfully, enrich the response with a ready-to-use
+  // capability URL anchored on the edge's own host.
+  if (originRes.status === 201 && minted) {
+    const url = new URL(c.req.url);
+    const capUrl = `${url.protocol}//${url.host}/${minted.code}?k=${encodeURIComponent(minted.token)}`;
+    return c.json({ ...minted, capability_url: capUrl }, 201);
+  }
+  return new Response(text, {
+    status: originRes.status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+});
+
+// GET /:code — hot read path; capability token (?k=) bypasses edge cache.
 app.get('/:code', async (c) => {
   const code = c.req.param('code');
+  const token = c.req.query('k');
 
-  // 1. Edge-local cache. cacheTtl keeps the mapping hot in the colo's
-  //    local cache for the TTL window, dodging even the KV disk read.
+  // Signed path: send to origin for verification. Can't trust KV here
+  // because the cache doesn't model per-request authorization.
+  if (token) {
+    const originRes = await fetch(
+      `${c.env.ORIGIN_URL}/${encodeURIComponent(code)}?k=${encodeURIComponent(token)}`
+    );
+    if (originRes.status === 403) {
+      return c.json({ error: 'capability rejected' }, 403);
+    }
+    if (originRes.status === 404) {
+      return c.json({ error: 'not found', code }, 404);
+    }
+    if (!originRes.ok) {
+      return c.json({ error: 'origin lookup failed' }, 502);
+    }
+    const data = (await originRes.json()) as { long_url: string };
+    return c.redirect(data.long_url, 302);
+  }
+
+  // Unsigned path: edge KV first, origin on miss, populate on miss.
   const cached = await c.env.LINKS.get(code, { cacheTtl: EDGE_CACHE_TTL_SEC });
-  if (cached) {
-    return c.redirect(cached, 302);
-  }
+  if (cached) return c.redirect(cached, 302);
 
-  // 2. Miss → ask origin. Origin itself has a Redis cache in front of
-  //    Postgres, so misses are still cheap most of the time.
   const originRes = await fetch(`${c.env.ORIGIN_URL}/${encodeURIComponent(code)}`);
-
-  if (originRes.status === 404) {
-    return c.json({ error: 'not found', code }, 404);
-  }
-  if (!originRes.ok) {
-    return c.json({ error: 'origin lookup failed' }, 502);
-  }
+  if (originRes.status === 404) return c.json({ error: 'not found', code }, 404);
+  if (!originRes.ok) return c.json({ error: 'origin lookup failed' }, 502);
 
   const data = (await originRes.json()) as { code: string; long_url: string };
-
-  // 3. Populate KV for next time. waitUntil lets us return the redirect
-  //    before the KV write completes — the user doesn't wait on cache fill.
   c.executionCtx.waitUntil(
     c.env.LINKS.put(code, data.long_url, { expirationTtl: EDGE_CACHE_TTL_SEC })
   );
-
-  // 302 (Found) rather than 301 (Moved Permanently): 301 is aggressively
-  // browser-cached and would break both click analytics and any future
-  // destination change.
   return c.redirect(data.long_url, 302);
 });
 
