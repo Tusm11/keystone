@@ -16,6 +16,7 @@ import (
 	"github.com/Tusm11/keystone/origin/internal/metrics"
 	"github.com/Tusm11/keystone/origin/internal/primitives/capability"
 	"github.com/Tusm11/keystone/origin/internal/primitives/codegen"
+	"github.com/Tusm11/keystone/origin/internal/ratelimit"
 	"github.com/Tusm11/keystone/origin/internal/signing"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
@@ -28,26 +29,48 @@ var hostname = func() string {
 	return h
 }()
 
+// RateLimits controls per-endpoint quotas. Zero limit = disabled.
+type RateLimits struct {
+	ShortenPerMinute      int
+	CapabilitiesPerMinute int
+}
+
 type Server struct {
 	Store   storage.Store
 	Clicks  *events.Publisher
 	Signers *signing.Registry
 	Uses    *signing.UsesCounter
+	Limiter *ratelimit.Limiter // optional
+	Limits  RateLimits
 }
 
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
-	// Metrics endpoint stays outside the metrics middleware — don't want
-	// scrapes polluting the histograms.
 	r.Handle("/metrics", promhttp.Handler())
 
-	// Everything else is wrapped.
 	r.Group(func(r chi.Router) {
 		r.Use(metrics.Middleware)
+
 		r.Get("/health", s.health)
-		r.Post("/shorten", s.shorten)
-		r.Post("/capabilities", s.mintCapability)
 		r.Get("/{code}", s.resolve)
+
+		// Rate-limited mutating endpoints. If no limiter is configured
+		// (dev without Redis), the per-endpoint middleware is skipped.
+		if s.Limiter != nil && s.Limits.ShortenPerMinute > 0 {
+			r.With(ratelimit.Middleware(s.Limiter, "shorten",
+				s.Limits.ShortenPerMinute, time.Minute)).
+				Post("/shorten", s.shorten)
+		} else {
+			r.Post("/shorten", s.shorten)
+		}
+
+		if s.Limiter != nil && s.Limits.CapabilitiesPerMinute > 0 {
+			r.With(ratelimit.Middleware(s.Limiter, "capabilities",
+				s.Limits.CapabilitiesPerMinute, time.Minute)).
+				Post("/capabilities", s.mintCapability)
+		} else {
+			r.Post("/capabilities", s.mintCapability)
+		}
 	})
 	return r
 }
@@ -58,6 +81,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"service":         "keystone-origin",
 		"host":            hostname,
 		"capabilities_on": s.Signers != nil && s.Signers.HasLocalSigner(),
+		"rate_limit_on":   s.Limiter != nil,
 	})
 }
 
@@ -165,11 +189,8 @@ func (s *Server) mintCapability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, mintResponse{
-		Code:    cap.Code,
-		Token:   token,
-		ExpAt:   cap.Exp,
-		MaxUses: cap.Uses,
-		Signer:  signerID,
+		Code: cap.Code, Token: token, ExpAt: cap.Exp,
+		MaxUses: cap.Uses, Signer: signerID,
 	})
 }
 

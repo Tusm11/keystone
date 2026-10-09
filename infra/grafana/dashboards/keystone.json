@@ -7,17 +7,13 @@
   "liveNow": true,
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
-      "title": "Requests / sec",
+      "id": 1, "type": "stat", "title": "Requests / sec",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
       "targets": [{ "expr": "sum(rate(keystone_http_requests_total[1m]))", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 0 } }
     },
     {
-      "id": 2,
-      "type": "stat",
-      "title": "p99 latency",
+      "id": 2, "type": "stat", "title": "p99 latency",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "targets": [{
         "expr": "histogram_quantile(0.99, sum(rate(keystone_http_request_duration_seconds_bucket[1m])) by (le))",
@@ -26,9 +22,7 @@
       "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 } }
     },
     {
-      "id": 3,
-      "type": "stat",
-      "title": "Cache hit rate",
+      "id": 3, "type": "stat", "title": "Cache hit rate",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "targets": [{
         "expr": "sum(rate(keystone_cache_lookups_total{result=\"hit\"}[1m])) / sum(rate(keystone_cache_lookups_total[1m]))",
@@ -37,17 +31,13 @@
       "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 2, "min": 0, "max": 1 } }
     },
     {
-      "id": 4,
-      "type": "stat",
-      "title": "Stream pending",
+      "id": 4, "type": "stat", "title": "Stream pending",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [{ "expr": "keystone_click_stream_pending", "refId": "A" }],
       "fieldConfig": { "defaults": { "unit": "short" } }
     },
     {
-      "id": 5,
-      "type": "timeseries",
-      "title": "HTTP latency percentiles",
+      "id": 5, "type": "timeseries", "title": "HTTP latency percentiles",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
       "targets": [
         { "expr": "histogram_quantile(0.50, sum(rate(keystone_http_request_duration_seconds_bucket[1m])) by (le))", "legendFormat": "p50", "refId": "A" },
@@ -57,33 +47,25 @@
       "fieldConfig": { "defaults": { "unit": "s" } }
     },
     {
-      "id": 6,
-      "type": "timeseries",
-      "title": "Request rate by route",
+      "id": 6, "type": "timeseries", "title": "Request rate by route",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
       "targets": [{
         "expr": "sum(rate(keystone_http_requests_total[1m])) by (route)",
-        "legendFormat": "{{route}}",
-        "refId": "A"
+        "legendFormat": "{{route}}", "refId": "A"
       }],
       "fieldConfig": { "defaults": { "unit": "reqps" } }
     },
     {
-      "id": 7,
-      "type": "timeseries",
-      "title": "Cache lookups by outcome",
+      "id": 7, "type": "timeseries", "title": "Cache lookups by outcome",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
       "targets": [{
         "expr": "sum(rate(keystone_cache_lookups_total[1m])) by (result)",
-        "legendFormat": "{{result}}",
-        "refId": "A"
+        "legendFormat": "{{result}}", "refId": "A"
       }],
       "fieldConfig": { "defaults": { "unit": "ops" } }
     },
     {
-      "id": 8,
-      "type": "timeseries",
-      "title": "Singleflight shares + Click pipeline",
+      "id": 8, "type": "timeseries", "title": "Singleflight shares + Click pipeline",
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 13 },
       "targets": [
         { "expr": "rate(keystone_singleflight_shared_total[1m])", "legendFormat": "singleflight shared/s", "refId": "A" },
@@ -92,16 +74,22 @@
       ]
     },
     {
-      "id": 9,
-      "type": "timeseries",
-      "title": "Requests by replica (fleet distribution)",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 22 },
+      "id": 9, "type": "timeseries", "title": "Requests by replica (fleet distribution)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 22 },
       "targets": [{
         "expr": "sum(rate(keystone_http_requests_total[1m])) by (instance)",
-        "legendFormat": "{{instance}}",
-        "refId": "A"
+        "legendFormat": "{{instance}}", "refId": "A"
       }],
       "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Rate-limit decisions",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 22 },
+      "targets": [{
+        "expr": "sum(rate(keystone_rate_limit_decisions_total[1m])) by (scope, result)",
+        "legendFormat": "{{scope}} / {{result}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
     }
   ],
   "refresh": "5s",
@@ -113,6 +101,6 @@
   "timezone": "",
   "title": "Keystone — overview",
   "uid": "keystone-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -1,17 +1,4 @@
 // keystone-origin: the authoritative shortener API.
-//
-// Store composition:
-//   DATABASE_URL + REDIS_URL  → Cached(Postgres) + click publisher
-//   DATABASE_URL only         → Postgres, no cache, no analytics
-//   neither                   → in-memory                            (dev)
-//
-// Capability signing (optional):
-//   KEYSTONE_SIGNING_PRIVATE_KEY + KEYSTONE_SIGNER_ID
-//     → origin can mint capability tokens via POST /capabilities.
-//   Without them, this node is verifier-only — but there are no other
-//   signers to verify against yet, so capabilities just stay off.
-//
-// Generate a keypair with:  go run ./cmd/keygen
 package main
 
 import (
@@ -21,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -28,6 +16,7 @@ import (
 
 	"github.com/Tusm11/keystone/origin/internal/events"
 	keystonehttp "github.com/Tusm11/keystone/origin/internal/http"
+	"github.com/Tusm11/keystone/origin/internal/ratelimit"
 	"github.com/Tusm11/keystone/origin/internal/signing"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
@@ -54,11 +43,22 @@ func main() {
 		log.Info("capability signing disabled (no KEYSTONE_SIGNING_PRIVATE_KEY)")
 	}
 
+	var limiter *ratelimit.Limiter
+	if rdb != nil {
+		limiter = ratelimit.New(rdb, log)
+		log.Info("rate limiting enabled")
+	}
+
 	server := &keystonehttp.Server{
 		Store:   store,
 		Clicks:  publisher,
 		Signers: signers,
 		Uses:    usesCounter,
+		Limiter: limiter,
+		Limits: keystonehttp.RateLimits{
+			ShortenPerMinute:      envInt("KEYSTONE_RL_SHORTEN", 60),
+			CapabilitiesPerMinute: envInt("KEYSTONE_RL_CAPABILITIES", 30),
+		},
 	}
 
 	s := &http.Server{
@@ -137,6 +137,16 @@ func buildStorage(log *slog.Logger) (storage.Store, *events.Publisher, *redis.Cl
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n > 0 {
+			return n
+		}
 	}
 	return def
 }
