@@ -5,5 +5,11 @@
   "compatibility_date": "2026-10-01",
   "observability": {
     "enabled": true
+  },
+  "vars": {
+    // URL of the Go origin API. In local dev, Wrangler forwards localhost
+    // traffic from the Worker to the host, so this works out of the box.
+    // In production, override with the deployed origin's URL.
+    "ORIGIN_URL": "http://localhost:8080"
   }
 }
