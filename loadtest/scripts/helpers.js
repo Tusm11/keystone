@@ -2,19 +2,18 @@
 
 export const BASE_URL = __ENV.BASE_URL || 'http://host.docker.internal:8787';
 
-// Edge returns 302 redirects on resolve; origin returns 200 + JSON body.
-// Both are "success" — same lookup logic, different response shape.
-// We detect which target we're hitting by port.
-export const EXPECT_STATUS = BASE_URL.includes(':8080') ? 200 : 302;
+// What status counts as a successful resolve depends on which layer we hit:
+//   :8787  → edge Worker → 302 redirect to the long URL
+//   :8080  → origin direct → 200 + JSON body
+//   :8090  → nginx LB → origin → 200 + JSON body
+//   anything else → treat as edge (302) by default.
+// Detection by port is good enough for this harness.
+export const EXPECT_STATUS = BASE_URL.includes(':8787') ? 302 : 200;
 
 export function isOkResolve(res) {
   return res.status === EXPECT_STATUS;
 }
 
-// Sequentially mint N short links; returns the array of codes.
-// Minting goes through whichever BASE_URL points at:
-//   edge (:8787)  → shortening is proxied to origin
-//   origin (:8080) → direct origin call
 export function mintCodes(http, n, label) {
   const codes = [];
   for (let i = 0; i < n; i++) {
