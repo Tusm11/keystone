@@ -1,0 +1,33 @@
+# Node / TypeScript
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+origin/bin/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+*.pem
+*.key
+secrets/
