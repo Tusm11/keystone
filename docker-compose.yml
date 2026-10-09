@@ -1,0 +1,42 @@
+# Local dev infrastructure for Keystone.
+# Start:  docker compose up -d
+# Stop:   docker compose down
+# Nuke:   docker compose down -v   (also wipes volumes — fresh state)
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: keystone-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keystone
+      POSTGRES_PASSWORD: keystone_dev_pw
+      POSTGRES_DB: keystone
+    ports:
+      - "5432:5432"
+    volumes:
+      - keystone_pgdata:/var/lib/postgresql/data
+      - ./origin/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keystone -d keystone"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: keystone-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # --maxmemory + --maxmemory-policy makes Redis a safe LRU cache instead
+    # of an unbounded store — if it fills up, oldest entries get evicted
+    # rather than Redis OOMing.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  keystone_pgdata:
