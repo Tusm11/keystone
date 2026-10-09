@@ -1,19 +1,12 @@
 # Local dev infrastructure for Keystone.
 #
-# Three usage modes:
-#
-# 1. Dev (default) — native Go hot-reload for the origin:
-#       docker compose up -d                        (postgres + redis only)
-#       cd origin && go run ./cmd/server            (origin on :8080)
-#       cd edge && npm run dev                      (edge on :8787)
-#
-# 2. Scale (horizontal) — origin + LB in Docker, scaled:
-#       docker compose --profile scale up -d --scale origin=3 --build
-#       # Nginx LB on :8090 → three origin replicas.
-#       # Edge should point at :8090 instead of :8080.
-#
-# 3. Load tests — see loadtest/README.md
-#       docker compose --profile loadtest run --rm k6 run scripts/<name>.js
+# Modes:
+#  1. Dev (default)  — postgres + redis; origin runs natively (go run)
+#  2. Scale          — docker compose --profile scale up -d --scale origin=3
+#                      origin + lb + clickworker in Docker
+#  3. Observability  — docker compose --profile scale --profile observe up -d
+#                      adds Prometheus + Grafana scraping the fleet
+#  4. Load tests     — docker compose --profile loadtest run --rm k6 run ...
 
 services:
   postgres:
@@ -54,18 +47,16 @@ services:
       timeout: 3s
       retries: 10
 
-  # --- scaling profile: multiple origin replicas + nginx LB ---
+  # --- scale profile ---
 
   origin:
     profiles: ["scale"]
     build:
       context: ./origin
-    # No container_name — Docker Compose scaling needs unique auto-names.
     environment:
       ORIGIN_ADDR: ":8080"
       DATABASE_URL: postgres://keystone:keystone_dev_pw@postgres:5432/keystone
       REDIS_URL: redis://redis:6379/0
-      # Capability signing — only reads these if you set them in a .env file.
       KEYSTONE_SIGNING_PRIVATE_KEY: ${KEYSTONE_SIGNING_PRIVATE_KEY:-}
       KEYSTONE_SIGNER_ID: ${KEYSTONE_SIGNER_ID:-}
     expose:
@@ -85,6 +76,9 @@ services:
     environment:
       DATABASE_URL: postgres://keystone:keystone_dev_pw@postgres:5432/keystone
       REDIS_URL: redis://redis:6379/0
+      CLICKWORKER_METRICS_ADDR: ":8081"
+    expose:
+      - "8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,6 +96,41 @@ services:
     depends_on:
       - origin
 
+  # --- observability profile ---
+
+  prometheus:
+    profiles: ["observe"]
+    image: prom/prometheus:v2.54.1
+    container_name: keystone-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=24h"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    profiles: ["observe"]
+    image: grafana/grafana:11.2.2
+    container_name: keystone-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: dark
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
   # --- loadtest profile ---
 
   k6:
@@ -116,3 +145,5 @@ services:
 
 volumes:
   keystone_pgdata:
+  prometheus_data:
+  grafana_data:

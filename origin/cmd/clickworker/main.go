@@ -1,9 +1,6 @@
 // clickworker: consumes click events from the Redis Stream and batches
-// them into the Postgres clicks table.
-//
-// Deliberately a SEPARATE binary from the origin — this is the real-world
-// pattern. Analytics being slow, crashing, or needing a deploy must never
-// affect the live request path. Different process, different scaling knobs.
+// them into the Postgres clicks table. Also exposes a /metrics endpoint
+// on :8081 so Prometheus can scrape its own stats.
 package main
 
 import (
@@ -11,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/Tusm11/keystone/origin/internal/events"
@@ -32,9 +31,8 @@ func main() {
 		log.Error("clickworker requires DATABASE_URL and REDIS_URL")
 		os.Exit(1)
 	}
+	metricsAddr := envOr("CLICKWORKER_METRICS_ADDR", ":8081")
 
-	// Consumer identity: hostname + PID lets multiple workers coexist in
-	// the same consumer group; Redis routes different messages to each.
 	hostname, _ := os.Hostname()
 	consumerName := fmt.Sprintf("%s-%d", hostname, os.Getpid())
 
@@ -76,6 +74,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Metrics server on its own port — separate from any business API.
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		log.Info("clickworker metrics listening", "addr", metricsAddr)
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server failed", "err", err)
+		}
+	}()
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -90,4 +98,11 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("stopped")
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

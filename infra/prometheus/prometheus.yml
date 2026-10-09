@@ -1,0 +1,32 @@
+# Prometheus scrape config for Keystone.
+#
+# DNS service discovery: Docker Compose assigns a service name as a DNS
+# label resolving to ALL replica container IPs. Prometheus's `dns_sd_configs`
+# with type A resolves and creates one scrape target per IP — so when you
+# `--scale origin=3`, all three replicas get scraped automatically.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Each origin replica, discovered via Docker's embedded DNS.
+  - job_name: 'origin'
+    dns_sd_configs:
+      - names: ['origin']
+        type: 'A'
+        port: 8080
+    metrics_path: /metrics
+
+  # Single-instance consumer.
+  - job_name: 'clickworker'
+    dns_sd_configs:
+      - names: ['clickworker']
+        type: 'A'
+        port: 8081
+    metrics_path: /metrics
+
+  # Prometheus itself — useful for sanity checks.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

@@ -1,5 +1,4 @@
 // Package http wires routes to primitives + storage.
-// Handlers are deliberately thin: parse → call primitive/store → write JSON.
 package http
 
 import (
@@ -11,16 +10,16 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/Tusm11/keystone/origin/internal/events"
+	"github.com/Tusm11/keystone/origin/internal/metrics"
 	"github.com/Tusm11/keystone/origin/internal/primitives/capability"
 	"github.com/Tusm11/keystone/origin/internal/primitives/codegen"
 	"github.com/Tusm11/keystone/origin/internal/signing"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
 
-// hostname is captured once at startup; used in /health responses so we
-// can see which replica served a request behind the load balancer.
 var hostname = func() string {
 	h, err := os.Hostname()
 	if err != nil {
@@ -38,10 +37,18 @@ type Server struct {
 
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
-	r.Get("/health", s.health)
-	r.Post("/shorten", s.shorten)
-	r.Post("/capabilities", s.mintCapability)
-	r.Get("/{code}", s.resolve)
+	// Metrics endpoint stays outside the metrics middleware — don't want
+	// scrapes polluting the histograms.
+	r.Handle("/metrics", promhttp.Handler())
+
+	// Everything else is wrapped.
+	r.Group(func(r chi.Router) {
+		r.Use(metrics.Middleware)
+		r.Get("/health", s.health)
+		r.Post("/shorten", s.shorten)
+		r.Post("/capabilities", s.mintCapability)
+		r.Get("/{code}", s.resolve)
+	})
 	return r
 }
 
@@ -75,7 +82,6 @@ func (s *Server) shorten(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errJSON("url is required"))
 		return
 	}
-
 	const maxRetries = 5
 	for i := 0; i < maxRetries; i++ {
 		code, err := codegen.Random(7)
@@ -196,8 +202,6 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Clicks.PublishClick(code)
-	// Add the serving replica's hostname to the response so load-balancing
-	// is observable from the client side under a curl loop.
 	w.Header().Set("X-Served-By", hostname)
 	writeJSON(w, http.StatusOK, resolveResponse{Code: code, LongURL: longURL})
 }
@@ -205,22 +209,35 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
 func (s *Server) verifyCapability(token, code string) error {
 	peeked, err := peekSigner(token)
 	if err != nil {
+		metrics.CapabilityVerify.WithLabelValues("malformed").Inc()
 		return err
 	}
 	pub, err := s.Signers.PublicKey(peeked)
 	if err != nil {
+		metrics.CapabilityVerify.WithLabelValues("unknown_signer").Inc()
 		return err
 	}
 	cap, err := capability.Verify(token, pub, time.Now())
 	if err != nil {
+		switch {
+		case errors.Is(err, capability.ErrExpired):
+			metrics.CapabilityVerify.WithLabelValues("expired").Inc()
+		case errors.Is(err, capability.ErrBadSignature):
+			metrics.CapabilityVerify.WithLabelValues("bad_signature").Inc()
+		default:
+			metrics.CapabilityVerify.WithLabelValues("malformed").Inc()
+		}
 		return err
 	}
 	if cap.Code != code {
+		metrics.CapabilityVerify.WithLabelValues("bad_signature").Inc()
 		return errors.New("capability code does not match url")
 	}
 	if err := s.Uses.Charge(cap.Nonce, cap.Uses); err != nil {
+		metrics.CapabilityVerify.WithLabelValues("uses_exceeded").Inc()
 		return err
 	}
+	metrics.CapabilityVerify.WithLabelValues("ok").Inc()
 	return nil
 }
 

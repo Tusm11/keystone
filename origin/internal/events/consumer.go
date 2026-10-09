@@ -1,17 +1,5 @@
-// Click consumer: reads events from the Redis Stream and batches them into
-// Postgres. Separate goroutine → separate binary → separate deployment
-// target in prod. The resolve hot path is not touched by any of this.
-//
-// Shape of the loop:
-//
-//   1. XREADGROUP, batch of up to BatchSize, blocking up to BlockDuration.
-//   2. Aggregate the batch in-memory by code → map[string]int.
-//   3. One SQL statement per unique code (INSERT ... ON CONFLICT DO UPDATE).
-//   4. XACK the batch's ids.
-//
-// Idempotency: redelivery just double-counts within one batch. For strict
-// exactly-once we'd carry an idempotency key per event (XID) and dedupe in
-// Postgres. v1 skips that; the cost is minor count drift under failure.
+// Click consumer: reads events from the Redis Stream, aggregates by code,
+// writes one transactional UPSERT per batch to Postgres.
 package events
 
 import (
@@ -21,18 +9,21 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/Tusm11/keystone/origin/internal/metrics"
 )
 
 const (
 	GroupName     = "clickworker"
 	BatchSize     = 500
 	BlockDuration = 2 * time.Second
+	pendingPollEvery = 10 * time.Second
 )
 
 type Consumer struct {
 	rdb      *redis.Client
 	pool     *pgxpool.Pool
-	consumer string // XREADGROUP consumer name — unique per worker instance
+	consumer string
 	log      *slog.Logger
 }
 
@@ -40,8 +31,6 @@ func NewConsumer(rdb *redis.Client, pool *pgxpool.Pool, consumerName string, log
 	return &Consumer{rdb: rdb, pool: pool, consumer: consumerName, log: log}
 }
 
-// EnsureGroup creates the consumer group if it doesn't exist. Safe to call
-// at every startup — the "BUSYGROUP" error is swallowed.
 func (c *Consumer) EnsureGroup(ctx context.Context) error {
 	err := c.rdb.XGroupCreateMkStream(ctx, StreamName, GroupName, "0").Err()
 	if err != nil && err.Error() == "BUSYGROUP Consumer Group name already exists" {
@@ -50,13 +39,14 @@ func (c *Consumer) EnsureGroup(ctx context.Context) error {
 	return err
 }
 
-// Run blocks until ctx is cancelled, consuming and flushing batches.
 func (c *Consumer) Run(ctx context.Context) error {
+	// Background pending-count poller feeds the gauge for Grafana.
+	go c.pollPending(ctx)
+
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-
 		res, err := c.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    GroupName,
 			Consumer: c.consumer,
@@ -66,20 +56,18 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}).Result()
 		if err != nil {
 			if err == redis.Nil || ctx.Err() != nil {
-				continue // timeout, no messages — poll again
+				continue
 			}
 			c.log.Error("xreadgroup failed", "err", err)
-			time.Sleep(1 * time.Second) // backoff on repeated errors
+			time.Sleep(1 * time.Second)
 			continue
 		}
-
 		for _, stream := range res {
 			if len(stream.Messages) == 0 {
 				continue
 			}
 			if err := c.handleBatch(ctx, stream.Messages); err != nil {
 				c.log.Error("batch handle failed", "err", err)
-				// don't ack — redis will redeliver after visibility timeout
 				continue
 			}
 			ids := make([]string, len(stream.Messages))
@@ -93,13 +81,29 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 }
 
-// handleBatch aggregates the batch and writes one row per unique code.
+func (c *Consumer) pollPending(ctx context.Context) {
+	t := time.NewTicker(pendingPollEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := c.rdb.XLen(ctx, StreamName).Result()
+			if err != nil {
+				continue
+			}
+			metrics.ClickStreamPending.Set(float64(n))
+		}
+	}
+}
+
 func (c *Consumer) handleBatch(ctx context.Context, msgs []redis.XMessage) error {
 	counts := make(map[string]int64, len(msgs))
 	for _, m := range msgs {
 		code, ok := m.Values["code"].(string)
 		if !ok || code == "" {
-			continue // malformed event — drop silently
+			continue
 		}
 		counts[code]++
 	}
@@ -107,16 +111,12 @@ func (c *Consumer) handleBatch(ctx context.Context, msgs []redis.XMessage) error
 		return nil
 	}
 
-	// A transaction so partial-flush can't leave the batch half-applied.
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Upsert each code's count. UPSERT is the right primitive here —
-	// we never know if the row exists yet, and we don't want a round-trip
-	// to find out. ON CONFLICT handles both insert and update in one shot.
 	for code, delta := range counts {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO clicks (code, count, last_click)
@@ -132,6 +132,9 @@ func (c *Consumer) handleBatch(ctx context.Context, msgs []redis.XMessage) error
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+
+	metrics.ClicksConsumed.Add(float64(len(msgs)))
+	metrics.ClickBatchSize.Observe(float64(len(msgs)))
 	c.log.Info("batch flushed", "codes", len(counts), "events", len(msgs))
 	return nil
 }
