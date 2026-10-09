@@ -2,12 +2,11 @@
 //
 // Backing store is chosen at startup from env vars:
 //
-//   DATABASE_URL + REDIS_URL  → Cached(Postgres)   (production shape)
-//   DATABASE_URL only         → Postgres           (durable, no cache)
-//   neither                   → in-memory          (fast local dev)
+//   DATABASE_URL + REDIS_URL  → Cached(Postgres) + click publisher   (prod)
+//   DATABASE_URL only         → Postgres, no cache, no analytics
+//   neither                   → in-memory, no analytics              (dev)
 //
-// Handlers depend only on the Store interface, so swapping the backing
-// doesn't touch request-handling code.
+// Handlers depend only on the Store interface + an optional Publisher.
 package main
 
 import (
@@ -22,6 +21,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/Tusm11/keystone/origin/internal/events"
 	keystonehttp "github.com/Tusm11/keystone/origin/internal/http"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
@@ -32,11 +32,11 @@ func main() {
 
 	addr := envOr("ORIGIN_ADDR", ":8080")
 
-	store := pickStore(log)
-	server := &keystonehttp.Server{Store: store}
+	store, publisher := build(log)
+	server := &keystonehttp.Server{Store: store, Clicks: publisher}
 
-	// Explicit timeouts: Go's default of "no timeout" lets slow clients hold
-	// connections open forever and exhaust file descriptors.
+	// Explicit timeouts — the Go stdlib default is "no timeout", a classic
+	// fd-exhaustion footgun.
 	s := &http.Server{
 		Addr:         addr,
 		Handler:      server.Routes(),
@@ -45,9 +45,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown: on SIGINT/SIGTERM, stop accepting new connections
-	// and wait up to 15s for in-flight requests to finish before exiting.
-	// Without this, Ctrl+C or a container stop drops live requests.
 	done := make(chan struct{})
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -71,8 +68,7 @@ func main() {
 	log.Info("stopped")
 }
 
-// pickStore inspects env and returns the right storage.Store composition.
-func pickStore(log *slog.Logger) storage.Store {
+func build(log *slog.Logger) (storage.Store, *events.Publisher) {
 	dsn := os.Getenv("DATABASE_URL")
 
 	var base storage.Store
@@ -93,7 +89,7 @@ func pickStore(log *slog.Logger) storage.Store {
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
-		return base
+		return base, nil
 	}
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -101,15 +97,17 @@ func pickStore(log *slog.Logger) storage.Store {
 		os.Exit(1)
 	}
 	rdb := redis.NewClient(opts)
-	// Ping — fail-fast on bad cache config.
 	pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(pingCtx).Err(); err != nil {
 		log.Error("redis ping failed", "err", err)
 		os.Exit(1)
 	}
-	log.Info("connected to redis — cache enabled")
-	return storage.NewCached(base, rdb, log)
+	log.Info("connected to redis — cache + analytics enabled")
+
+	cached := storage.NewCached(base, rdb, log)
+	publisher := events.NewPublisher(rdb, log)
+	return cached, publisher
 }
 
 func envOr(key, def string) string {

@@ -5,17 +5,19 @@ package http
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Tusm11/keystone/origin/internal/events"
 	"github.com/Tusm11/keystone/origin/internal/primitives/codegen"
 	"github.com/Tusm11/keystone/origin/internal/storage"
 )
 
 type Server struct {
-	Store storage.Store
+	Store  storage.Store
+	Clicks *events.Publisher // optional; nil when Redis isn't wired
 }
 
 func (s *Server) Routes() http.Handler {
@@ -58,7 +60,7 @@ func (s *Server) shorten(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < maxRetries; i++ {
 		code, err := codegen.Random(7)
 		if err != nil {
-			log.Printf("codegen error: %v", err)
+			slog.Error("codegen error", "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "codegen failed"})
 			return
 		}
@@ -68,7 +70,7 @@ func (s *Server) shorten(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !errors.Is(saveErr, storage.ErrCodeTaken) {
-			log.Printf("store error: %v", saveErr)
+			slog.Error("store error", "err", saveErr)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "storage failed"})
 			return
 		}
@@ -93,6 +95,11 @@ func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "storage failed"})
 		return
 	}
+
+	// Fire the click event into the pipeline. Short-timeout, non-blocking;
+	// a dead analytics path must not break the redirect lookup.
+	s.Clicks.PublishClick(code)
+
 	writeJSON(w, http.StatusOK, resolveResponse{Code: code, LongURL: longURL})
 }
 
