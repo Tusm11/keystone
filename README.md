@@ -286,51 +286,6 @@ failed test.
 
 ---
 
-## Systems concepts implemented
-
-The project is a curriculum as much as a product. Each of these is
-named, implemented, measured where appropriate, and documented:
-
-<details>
-<summary>28 concepts (click to expand)</summary>
-
-1. Store interface + dependency inversion
-2. Connection pooling (`pgxpool`)
-3. Fail-fast startup (ping dependencies before `ListenAndServe`)
-4. Graceful shutdown (SIGINT → drain → exit, 15s)
-5. Explicit HTTP server timeouts (Read, Write, Idle)
-6. Look-aside cache (Redis in front of Postgres)
-7. Singleflight / request coalescing
-8. Negative caching (short-TTL sentinel for 404s)
-9. Graceful degradation (Redis down → bypass to DB)
-10. Structured JSON logging (`log/slog`)
-11. Hot path / cold path separation
-12. Message queue + at-least-once delivery (Redis Streams)
-13. Batched aggregation in the consumer
-14. Bounded stream (`MAXLEN ~`)
-15. Multi-tier caching (Workers KV + Redis + Postgres)
-16. Non-blocking cache fill (`ctx.waitUntil`)
-17. Immutable-data caching (codes never change destination)
-18. Two-pass crypto verification (parse signer → fetch key → verify)
-19. Fail-open counter (max-uses enforcement)
-20. Stateless horizontal scaling (four invariants)
-21. Low-cardinality metric labels (route pattern, not raw URL)
-22. Histogram-based percentiles via `histogram_quantile`
-23. DNS-based service discovery for scraping
-24. Atomic multi-op via Redis Lua
-25. Distributed rate limiting with shared state
-26. Fail-open with observable fallback (bypass_error metric)
-27. Cross-language primitive port with shared test vectors
-28. Byte-exact canonical JSON for cross-language signing
-
-</details>
-
----
-
-## License
-
-Apache-2.0.
-
 ## Author
 
 Built by [Abhiram](https://github.com/Tusm11). Direct feedback welcome
