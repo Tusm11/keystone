@@ -227,7 +227,7 @@ vectors: generate a token in Go, verify it byte-for-byte in Python,
 and vice versa.
 
 ```bash
-pip install keystone-core  # (coming to PyPI)
+pip install keystone-core 
 ```
 
 ```python
