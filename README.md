@@ -1,5 +1,10 @@
 # keystone
 
+[![PyPI](https://img.shields.io/pypi/v/keystone-core.svg?label=keystone-core&color=blue)](https://pypi.org/project/keystone-core/)
+[![Python](https://img.shields.io/pypi/pyversions/keystone-core.svg)](https://pypi.org/project/keystone-core/)
+[![License](https://img.shields.io/github/license/Tusm11/keystone.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/Tusm11/keystone?include_prereleases)](https://github.com/Tusm11/keystone/releases)
+
 > Short-link infrastructure for the agent era. Provenance-signed
 > capability tokens, horizontal-scale Go origin, TypeScript edge, and
 > a Python verifier (`keystone-core`) with cross-language test vectors.
