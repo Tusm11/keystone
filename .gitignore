@@ -33,3 +33,4 @@ desktop.ini
 secrets/
 # Load test outputs
 loadtest/output/*.json
+.venv/ 
